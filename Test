@@ -1,0 +1,348 @@
+data = data.frame() # Initialize empty data frame to store all data observations
+data = read.csv(file="C:/TempData/YearsAll.csv", header=TRUE)
+
+#######################################
+### DESCRIPTIVE STATISTICS          ###
+#######################################
+
+library(moments)
+
+mean(data[,6]) # 9.656213
+sd(data[,6]) # 5.723556
+min(data[,6]) # -8.9
+max(data[,6]) # 26.7
+skewness(data[,6]) # -0.07716575
+kurtosis(data[,6]) # 2.346593
+
+
+library(ggplot2)
+
+ggplot(data, aes(x=avg_temp)) + 
+  geom_histogram(color="black", fill="white")
+
+
+g = data[,6]
+h <- hist(g, breaks = 35, density = 10,
+          col = "lightgray", xlab = "Temperature",main = "Histogram of temperatures") 
+xfit <- seq(min(g), max(g), length = 35) 
+yfit <- dnorm(xfit, mean = mean(g), sd = sd(g)) 
+yfit <- yfit * diff(h$mids[1:2]) * length(g) 
+lines(xfit, yfit, col = "black", lwd = 2)
+
+
+
+#######################################
+### TREND - OLS REGRESSION          ###
+#######################################
+
+library(dplyr)
+library(ggplot2)
+
+data %>%
+  ggplot(aes(x = Obs, y = avg_temp)) +
+  geom_point(colour = "red") +
+  geom_smooth(method = "lm", fill = NA)
+
+model = lm(avg_temp ~ Obs, data = data)
+model
+summary(model)
+
+# 1924-1968, trend of 3.381e-05 per day, highly significant
+
+
+#######################################
+### DATA VISUALIZATION              ###
+#######################################
+
+ggplot(data, aes(x=avg_temp)) + 
+  geom_histogram(color="black", fill="white")
+
+plot(density(data$avg_temp))
+
+
+#######################################
+### DETREND, DESEASONALIZE          ###
+#######################################
+
+# Detrend data by substracting regression line from data
+detrend = data[,6]-(3.381e-05)*data$Obs
+data$detrend = detrend
+
+# Seasonality function
+t = c(1:length(data[,6]))
+y = data[,6]
+seas_trend = nls(y ~ a+b*t+b1*cos((2*pi*(t-g1))/365),start=list(a=1,b=1,b1=1,g1=1))
+seas_trend
+
+fit_seas_func = function(t){
+  9.435 + 0.00002694*t + 6.907*cos(2*pi*(t+159.1)/365)
+}
+
+time = c(1:(3*365))
+fit_data = fit_seas_func(time)
+plot(time, fit_data, type = "l", lwd = 5, ylim = c(-4,22),ylab = "Daily Average Temperature")
+lines(time, data[time,6], lwd = 1)
+
+deseas = fit_seas_func(t)
+data[,8] = deseas
+
+adj_avg_temp = detrend-deseas
+data$adj_avg_temp = adj_avg_temp # this is the detrended & deseasonalized data points
+
+# histogram of detrend & deseasonlized data
+g = data[,9]
+h <- hist(g, breaks = 35, density = 10,
+          col = "lightgray", xlab = "Temperature",main = "Histogram of temperatures") 
+xfit <- seq(min(g), max(g), length = 35) 
+yfit <- dnorm(xfit, mean = mean(g), sd = sd(g)) 
+yfit <- yfit * diff(h$mids[1:2]) * length(g) 
+lines(xfit, yfit, col = "black", lwd = 2)
+
+#######################################
+### MEAN-REVERSION PARAMETER        ###
+#######################################
+
+time_data = data[1:length(data[,9])-1,9] # detrended & deseasonalized data
+time_minus1_data = data[2:length(data[,9]),9] # alpha = 0.76785 significant at 1%
+
+lmodel <- lm(time_data ~ time_minus1_data)
+lmodel
+summary(lmodel)
+
+residuals = lmodel$residuals
+
+var(residuals)
+sd(residuals) # st dev = 1.91
+
+####
+# Do ACF of residuals and squared residuals
+# Find temporal dependence in the variance of residuals
+###
+
+
+#######################################
+### VOLATILITY FUNCTION             ###
+#######################################
+
+### Residuals from residuals of regression above (mean-reversion regression)
+res_data = data.frame()
+var_resdata = data.frame()
+
+for(i in 1:45){       # Put residuals into a dataframe (rows=days, cols=years)
+  for(j in 1:365){
+    res_data[j,i] = residuals[i*j]
+  }
+}
+
+res_data[365,45] = 0
+
+for(i in 1:365){    # Compute daily variance of residuals
+  var_resdata[i,1] = apply(res_data[i,], 1, var)
+}
+
+### variance of actual observations
+
+data_df = data.frame()
+
+for(i in 1:45){       # Put data into a dataframe (rows=days, cols=years)
+  for(j in 1:365){
+    data_df[j,i] = data[i*j,6]
+  }
+}
+
+for(i in 1:365){    # Compute daily variance of data
+  var_data[i,1] = apply(data_df[i,], 1, var)
+}
+
+### variance of de-trended and de-seasonalized observations
+
+data_df = data.frame()
+
+for(i in 1:45){       # Put data into a dataframe (rows=days, cols=years)
+  for(j in 1:365){
+    data_df[j,i] = data[i*j,9]
+  }
+}
+
+for(i in 1:365){    # Compute daily variance of data
+  var_data[i,1] = apply(data_df[i,], 1, var)
+}
+
+
+
+### vol function
+
+t=c(1:365)
+y = var_resdata[,1]
+y = var_data[,1]
+vola_fit = nls(y ~ c + 
+                 c1 * sin(2*1*pi*t/365) + 
+                 c2 * sin(2*2*pi*t/365) + 
+                 c3 * sin(2*3*pi*t/365) + 
+                 c4 * sin(2*4*pi*t/365) + 
+                 d1 * cos(2*1*pi*t/365) + 
+                 d2 * cos(2*2*pi*t/365) + 
+                 d3 * cos(2*3*pi*t/365) + 
+                 d4 * cos(2*4*pi*t/365) 
+                 ,start=list(c=1,c1=1,c2=1,c3=1,c4=1,d1=1,d2=1,d3=1,d4=1))
+
+var_func = function(t){ # estimated parameters using variance of residuals
+    3.65117 - 
+    0.03387 * sin(2*1*pi*t/365) - 
+    0.05387 * sin(2*2*pi*t/365) + 
+    0.05406 * sin(2*3*pi*t/365) - 
+    0.05008 * sin(2*4*pi*t/365) - 
+    0.02804 * cos(2*1*pi*t/365) - 
+    0.05687 * cos(2*2*pi*t/365) - 
+    0.12949 * cos(2*3*pi*t/365) - 
+    0.06746 * cos(2*4*pi*t/365) 
+}
+
+adj_vol = data.frame()
+
+for(i in 1:365){
+  adj_vol[i,1] = var_func(i)/0.76785^2
+}
+
+
+plot(var_func(t))
+plot(adj_vol[,1])
+
+var_func = function(t){ # estimated parameters using variance of data (garbage)
+  32.3541753 - 
+    0.5756769 * sin(2*1*pi*t/365) - 
+    0.1048066  * sin(2*2*pi*t/365) - 
+    0.7333331 * sin(2*3*pi*t/365) - 
+    0.8267394 * sin(2*4*pi*t/365) - 
+    1.8907220 * cos(2*1*pi*t/365) - 
+    0.4519502 * cos(2*2*pi*t/365) - 
+    1.3652011 * cos(2*3*pi*t/365) - 
+    0.7731068 * cos(2*4*pi*t/365) 
+}
+
+plot(var_func(t))
+
+var_func = function(t){ # estimated parameters using variance of data
+  8.92862 + 
+    0.02757 * sin(2*1*pi*t/365) + 
+    0.01233  * sin(2*2*pi*t/365) + 
+    0.06144 * sin(2*3*pi*t/365) - 
+    0.14630 * sin(2*4*pi*t/365) - 
+    0.12635 * cos(2*1*pi*t/365) - 
+    0.16356 * cos(2*2*pi*t/365) - 
+    0.29317 * cos(2*3*pi*t/365) - 
+    0.10735 * cos(2*4*pi*t/365) 
+}
+
+plot(var_func(t))
+
+## feb21
+
+data[,10] = data[,9] - var_data[,1]
+plot(data[1:365,10], type ="l")
+
+#######################################
+### ORNSTEIN-UHLENBECK PROCESS CODE ###
+#######################################
+
+alpha = 0.76785
+sigma = var_func(1:365)^1.8
+#sigma = var_func(1:365)/(alpha^2)
+n = 366
+T = 1
+x0 = data[length(data),6]
+t= c(16060:16425)
+
+s_t = fit_seas_func(t)
+
+ornstein_uhlenbeck <- function(T,t,n,alpha,sigma,x0){
+  dw  <- rnorm(n, 0, sqrt(T/n))
+  dt  <- T/n
+  x <- c(x0)
+  for (i in 2:(n+1)) {
+    x[i]  <-  x[i-1] + (s_t[i]-s_t[i-1]) - (1-alpha)*(x[i-1]-s_t[i-1]) + alpha*sigma[i]*(dw[i] - dw[i-1])
+  }
+  return(x);
+}
+
+model1 = ornstein_uhlenbeck(T,t,n,alpha,sigma,x0)
+model1 = model1[-1]
+model1 = model1[-366]
+model1 = model1[-365]
+length(model1)
+model1
+time = c(1:364)
+plot(time, model1, type = "l", lwd = 1, ylim = c(-8,28),ylab = "Daily Average Temperature")
+
+plot(data[16061:16424,6], type ="l")
+
+length(model1)
+plot(1:364,model1,type="l",col="green", ylim = c(-5,22))
+lines(1:364,data[16061:16424,6],col="blue") # the model's variance is too low
+
+
+length(data[16061:16425,6])
+
+
+########################################
+
+d.fc = read.csv(file="C:/TempData/1968.csv", header=TRUE)
+d.fc = d.fc[1:365,c(9:10)] # pick  relevant rows
+d.fc$avg_temp = NA
+
+for(i in 1:NROW(d.fc)){
+  d.fc[i,3] = (1/2)*(d.fc[i,1]+d.fc[i,2])
+}
+
+# CDD Real
+d.fc$CDD = NA
+for(i in 1:NROW(d.fc)){
+  d.fc[i,4] = max(d.fc[i,3]-18,0)
+}
+sum(d.fc[,4]) # Sum CDD = 19.15
+
+# HDD Real
+d.fc$HDD = NA
+for(i in 1:NROW(d.fc)){
+  d.fc[i,5] = max(18-d.fc[i,3],0)
+}
+sum(d.fc[,5]) # Sum HDD = 3080.26
+
+# Forecasted temperatures
+d.fc$Forecast = NA
+d.fc = d.fc[-365,]
+d.fc[,6] = model1
+
+# CDD Forecast
+d.fc$F_CDD = NA
+for(i in 1:NROW(d.fc)){
+  d.fc[i,7] = max(d.fc[i,6]-18,0)
+}
+sum(d.fc[,7]) # Sum CDD = 24.43342
+
+# HDD Forecast
+d.fc$F_HDD = NA
+for(i in 1:NROW(d.fc)){
+  d.fc[i,8] = max(18-d.fc[i,6],0)
+}
+sum(d.fc[,8]) # Sum HDD = 2972.247
+
+############ burn 
+
+data$burn_cdd = NA
+data$burn_hdd = NA
+
+  for(i in 1:16425){
+    data[i,7] = max(data[i,6]-18,0)
+  }
+  sum(data$burn_cdd)/45
+  
+  for(i in 1:16425){
+    data[i,8] = max(18-data[i,6],0)
+  }
+  sum(data$burn_hdd)/42
+  
+  
+  CDD_sim[j] = sum(d.fc[,7])
+  HDD_sim[j] = sum(d.fc[,8])
+
